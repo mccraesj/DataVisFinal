@@ -1,0 +1,331 @@
+---
+title: "Final"
+author: "Spencer McCrae"
+date: "2025-12-09"
+output: html_document
+---
+
+```{r setup}
+library(tidyverse)
+library(ggplot2)
+library(mplot)
+library(patchwork)
+library(rpart)
+library(rpart.plot)
+```
+
+## Pre-Processing
+
+Dataset found here https://catalog.data.gov/dataset/chicago-public-schools-progress-report-cards-2011-2012
+
+```{r}
+RawData <- read.csv("Chicago_Public_Schools_Progress_Report_Cards__2011-2012.csv")
+
+# First we remove all of the na values as they are all NDA values (but not always)
+# After that we find the variables that we want to focus on and remove the NDA values from those
+Data.RmNa <- na.omit(RawData) # Removing the NA variables
+
+# During this we want to use the Student and potentially the teacher attendance as a response variable. 
+# Thus we will remove all of the NDA values in those columns
+
+Data.NDAResponseRm <- Data.RmNa[!(Data.RmNa$Average.Student.Attendance == "NDA"), ]
+Data.NDAResponseRm <- Data.NDAResponseRm[!(Data.NDAResponseRm$Average.Teacher.Attendance == "NDA"), ]
+
+# And also for the Teacher's avg attendance we will remove the 0 values because it does not make sense for the teachers to never attend their classes
+
+Data.NDAResponseRm <- Data.NDAResponseRm[!(Data.NDAResponseRm$Average.Teacher.Attendance == 0), ]
+
+# From here we will discover our predictor variables
+# After ruminating through the dataset (and considering the requirements of the project) I have decided that I will be choosing these variables to move on with
+# Parent Engagement Icon, 	Parent Engagement Score, 	Parent Environment Icon, 	Parent Environment Score, Adequate.Yearly.Progress.Made, Safety.Score, Rate.Of.Misconducts, ISAT.Exceeding.Reading, and ISAT.Exceeding.Math 
+# I also wished to consider other variables as there are many that would tie in  nicely into this project, but these are my top contenders
+
+SelectedData <- Data.NDAResponseRm %>%
+  select(Average.Student.Attendance, Average.Teacher.Attendance,
+         Parent.Engagement.Icon, Parent.Engagement.Score, Parent.Environment.Icon,
+         Parent.Environment.Score, Adequate.Yearly.Progress.Made., Safety.Score, 
+         Rate.of.Misconducts..per.100.students., ISAT.Exceeding.Math..,
+         ISAT.Exceeding.Reading..
+         )
+
+# From this we can gather that the only cols with NDA in them are ones that are characters.
+# This happens to be great for us as none of the columns should be character columns anyways because all of the selected columns that are defaulted to character should be factors or int/doubles.
+glimpse(SelectedData)
+
+# Removing NDA Values
+SelectedData.RmNDA <- SelectedData[!(SelectedData$Parent.Engagement.Icon == "NDA"), ]
+SelectedData.RmNDA <- SelectedData.RmNDA[!(SelectedData.RmNDA$Parent.Engagement.Score == "NDA"), ]
+SelectedData.RmNDA <- SelectedData.RmNDA[!(SelectedData.RmNDA$Parent.Environment.Icon == "NDA"), ]
+SelectedData.RmNDA <- SelectedData.RmNDA[!(SelectedData.RmNDA$Parent.Environment.Score == "NDA"), ]
+SelectedData.RmNDA <- SelectedData.RmNDA[!(SelectedData.RmNDA$Adequate.Yearly.Progress.Made. == "NDA"), ]
+
+# This leaves us with 353 cleaned observations (Thank goodness because I did NOT want to find and clean another dataset).
+# From here we need to convert the variables into their proper datatype.
+SelectedData.FactoredVars <- SelectedData.RmNDA %>%
+  mutate(
+    # Parent Icons
+    Parent.Engagement.Icon = as.factor(Parent.Engagement.Icon),
+    Parent.Environment.Icon = as.factor(Parent.Environment.Icon),
+    # Yearly progress to bool
+    Adequate.Yearly.Progress.Made. = case_when(
+      Adequate.Yearly.Progress.Made. == "Yes" ~ T,
+      Adequate.Yearly.Progress.Made. == "No" ~ F,
+      .default = NA
+    ),
+    # Parent Scores to int
+    Parent.Engagement.Score = as.integer(Parent.Engagement.Score),
+    Parent.Environment.Score = as.integer(Parent.Environment.Score)
+  )
+
+# Just because I am unsure if this is a requirement, I will be creating a derived variable
+SelectedData.Fin <- SelectedData.FactoredVars %>%
+  mutate(
+    Diff.Average.Attendance.Student.Teacher = Average.Student.Attendance - Average.Teacher.Attendance,
+    # This likely will provide unreliable results, but its here for the sake of testing
+    Mean.Average.Attendance.Student.Teacher = (Average.Student.Attendance + Average.Teacher.Attendance) / 2
+  )
+
+# Wahoo
+glimpse(SelectedData.Fin)
+```
+
+## Exploratory Data Analysis 
+
+For this section of the project, I will explore the variables chosen as predictors for the response variable chosen (Continuing with the student attendance as it is a more reliable response variable).  
+
+```{r, SelectedData.Fin}
+# Lets start with exploring the variables, starting with the numerics
+#Parent.Engagement.Score
+ParentEngageGraph <- ggplot(SelectedData.Fin) + 
+  geom_point(aes(x = Parent.Engagement.Score, y = Average.Student.Attendance)) + 
+  geom_smooth(aes(x = Parent.Engagement.Score, y = Average.Student.Attendance)) + 
+  theme_bw() + 
+  labs(title = "Parent Engagement's relationship with Student Attendance",
+       subtitle = "Using loess formula and scatterplot",
+       x = "Parent Engagement Score",
+       y = "Average Student Attendance")
+
+#Parent.Environment.Score
+ParentEnvGraph <- ggplot(SelectedData.Fin) + 
+  geom_point(aes(x = Parent.Environment.Score, y = Average.Student.Attendance)) + 
+  geom_smooth(aes(x = Parent.Environment.Score, y = Average.Student.Attendance)) + 
+  theme_bw() + 
+  labs(title = "A Parent's Environment compared to Student Attendance",
+       subtitle = "Using loess formula and scatterplot",
+       x = "Parent Environment Score",
+       y = "Average Student Attendance")
+
+#Safety.Score
+SafetyScoreGraph <- ggplot(SelectedData.Fin) + 
+  geom_point(aes(x = Safety.Score, y = Average.Student.Attendance)) + 
+  geom_smooth(aes(x = Safety.Score, y = Average.Student.Attendance)) + 
+  theme_bw() + 
+  labs(title = "School's Safety Score relationship with Student Attendance",
+       subtitle = "Using loess formula and scatterplot",
+       x = "Safety Score",
+       y = "Average Student Attendance")
+
+#ISAT.Exceeding.Math..
+ISATMathGraph <- ggplot(SelectedData.Fin) + 
+  geom_point(aes(x = ISAT.Exceeding.Math.., y = Average.Student.Attendance)) + 
+  geom_smooth(aes(x = ISAT.Exceeding.Math.., y = Average.Student.Attendance)) + 
+  theme_bw() + 
+  labs(title = "How Schools exceeding ISAT Math Scores compare to Attendance",
+       subtitle = "Using loess formula and scatterplot",
+       x = "ISAT Exceeding Math Score Avg",
+       y = "Average Student Attendance")
+
+#ISAT.Exceeding.Reading..
+ISATReadingGraph <- ggplot(SelectedData.Fin) + 
+  geom_point(aes(x = ISAT.Exceeding.Reading.., y = Average.Student.Attendance)) + 
+  geom_smooth(aes(x = ISAT.Exceeding.Reading.., y = Average.Student.Attendance)) + 
+  theme_bw() + 
+  labs(title = "How Schools exceeding ISAT Reading Scores compare to Attendance",
+       subtitle = "Using loess formula and scatterplot",
+       x = "ISAT Exceeding Reading Score Avg",
+       y = "Average Student Attendance")
+
+#Rate.of.Misconducts..per.100.students.
+MisconductsGraph <- ggplot(SelectedData.Fin) + 
+  geom_point(aes(x = Rate.of.Misconducts..per.100.students., y = Average.Student.Attendance)) + 
+  geom_smooth(aes(x = Rate.of.Misconducts..per.100.students., y = Average.Student.Attendance)) + 
+  theme_bw() +
+  labs(title = "Rate of misconducts per 100 students compared to Student Attendance",
+       subtitle = "Using loess formula and scatterplot",
+       x = "Rate of Misconducts per 100 Students",
+       y = "Average Student Attendance")
+
+#now for the Categorical variables
+# We only have 3, and realistically we don't need to plot the parent variables 
+# because the numeric versions of the parent variables show the same thing.
+YearlyProgressGraph <- ggplot(SelectedData.Fin) + 
+  geom_point(aes(x = ISAT.Exceeding.Math.., y = Average.Student.Attendance,
+                 size = Adequate.Yearly.Progress.Made.,
+                 color = Adequate.Yearly.Progress.Made.)) + 
+  theme_bw() +
+  labs(title = "Adequate Yearly progress/ISAT Math Score with student Attendance",
+       subtitle = "Using scatterplot",
+       x = "ISAT Exceeding Math Score Avg",
+       y = "Average Student Attendance",
+       size = "Adequate Yearly Progress",
+       color = "Adequate Yearly Progress")
+
+ParentEngageGraph
+ParentEnvGraph
+SafetyScoreGraph
+YearlyProgressGraph
+MisconductsGraph
+ISATMathGraph
+ISATReadingGraph
+
+Dashboard <- (ParentEngageGraph | ParentEnvGraph | SafetyScoreGraph) /
+  (YearlyProgressGraph | MisconductsGraph) /
+  (ISATMathGraph | ISATReadingGraph)
+
+ParentDashboard <- (ParentEngageGraph | ParentEnvGraph)
+
+SafetyDashboard <- SafetyScoreGraph | MisconductsGraph
+
+ISATDashboard <- ISATMathGraph / ISATReadingGraph
+
+Dashboard
+ParentDashboard
+SafetyDashboard
+ISATDashboard
+
+```
+
+## Predictive Modeling
+
+Rational for the chosen models can be found in the comments below.
+
+```{r, SelectedData.Fin}
+
+# For this part of the Final I need to perform a 5 fold cross validation
+353/5
+
+# This will be 3 folds of 71 and 2 folds of 70
+fold <- rep(1:5, c(71, 71, 71, 70, 70))
+set.seed(1234)
+shuffledFolds <- sample(folds)
+
+SelectedData.Fin <- SelectedData.Fin %>%
+  mutate(fold = shuffledFolds)
+
+train_df <- filter(SelectedData.Fin, fold != 1)
+test_df <- filter(SelectedData.Fin, fold == 1)
+
+#To start I need to choose 5 models that I believe could best predict Student Attendance
+models <- c(
+  # The tests model, I believe that the students that attended more got higher scores on test and may make it a good predictor
+  Average.Student.Attendance ~ 
+    ISAT.Exceeding.Math.. + ISAT.Exceeding.Reading.. + 
+    Adequate.Yearly.Progress.Made.,
+  # Parents Model, parents are a large factor in students lives and may be an accurate predictor in their attendence
+  Average.Student.Attendance ~ Parent.Engagement.Icon + 
+    Parent.Engagement.Score + Parent.Environment.Icon + 
+    Parent.Environment.Score,
+  # Safety Model, how safe a school is matters a lot in how often a student can attend
+  Average.Student.Attendance ~ poly(Safety.Score, 2) + 
+    poly(Rate.of.Misconducts..per.100.students., 2) +
+    Parent.Environment.Score,
+  # Safety/Tests Model, this is a mix of what I believe to be the most accurate models, testing and safety
+  Average.Student.Attendance ~ Safety.Score + 
+    Rate.of.Misconducts..per.100.students. +
+    ISAT.Exceeding.Math..,
+  # The full model, a model that contains all of the selected preditor variables
+  Average.Student.Attendance ~
+    Parent.Engagement.Score + 
+    Parent.Engagement.Icon +
+    Parent.Environment.Score + 
+    Parent.Environment.Icon +
+    Adequate.Yearly.Progress.Made. +
+    Safety.Score + 
+    Rate.of.Misconducts..per.100.students. +
+    ISAT.Exceeding.Math.. + 
+    ISAT.Exceeding.Reading..
+)
+
+getResultForFold <- function(formula=fev ~ height, whatfold=1) {
+  # Assign folds
+  train_df <- fev %>% filter(fold!=whatfold)
+  test_df <- fev %>% filter(fold==whatfold)
+  
+  # Model Fit
+  fit <- lm(formula, data=train_df)
+  
+  # Assess quality of predictions
+  test_df <- test_df %>%
+    mutate(pred_fit = predict(fit, test_df))
+  test_df %>%
+    mutate(error = (fev-pred_fit)^2) %>%
+    summarize(mspe = mean(error))
+}
+
+getResultForFold <- function(formula=models[[1]], whatfold=1) {
+  # Assign folds
+  train_df <- SelectedData.Fin %>% filter(Groups != whatfold)
+  test_df <- SelectedData.Fin %>% filter(Groups == whatfold)
+  
+  # Model Fit
+  fit <- lm(formula, data=train_df)
+  
+  # Assess quality of predictions
+  test_df <- test_df %>%
+    mutate(pred_fit = predict(fit, test_df))
+  test_df %>%
+    mutate(error = (Average.Student.Attendance - pred_fit)^2) %>%
+    summarize(mspe = mean(error))
+}
+
+result <- c()
+
+for (m in models) {
+  for (fold in 1:5) {
+    newresult <- data.frame(Model= paste(deparse(m), collapse = " "),
+                            Fold=fold,
+                            MSPE = getResultForFold (formula=m, whatfold=fold))
+    result <- bind_rows(result, newresult)
+  }
+}
+```
+
+## Model Comparison
+
+```{r, SelectedData.Fin, test_df}
+
+#Finally, we compare the models that were chosen
+
+fit_lin <- lm(models[[1]], data = SelectedData.Fin)
+
+ggplot(data=test_df, aes(x = predict(fit_lin, test_df), y = Average.Student.Attendance)) +
+  geom_point() +
+  geom_line(aes(y=predict(fit_lin, test_df))) +
+  ggtitle("Tests") 
+
+fit_quad <- lm(models[[3]], data = SelectedData.Fin)
+
+ggplot(data=test_df, aes(x = predict(fit_quad, test_df), y = Average.Student.Attendance)) +
+  geom_point() +
+  geom_line(aes(y=predict(fit_quad, test_df))) +
+  ggtitle("Safety") 
+
+treeParents <- rpart(models[[2]], data = SelectedData.Fin)
+
+rpart.plot(treeParents)
+
+fit_safetyTests <- lm(models[[4]], data = SelectedData.Fin)
+
+ggplot(data=test_df, aes(x = predict(fit_safetyTests, test_df), y = Average.Student.Attendance)) +
+  geom_point() +
+  geom_line(aes(y=predict(fit_safetyTests, test_df))) +
+  ggtitle("Safety and Tests") 
+
+fit_full <- lm(models[[5]], data = SelectedData.Fin)
+
+ggplot(data=test_df, aes(x = predict(fit_full, test_df), y = Average.Student.Attendance)) +
+  geom_point() +
+  geom_line(aes(y=predict(fit_full, test_df))) +
+  ggtitle("Full") 
+
+```
